@@ -49,6 +49,7 @@ import java.util.concurrent.TimeoutException;
 @SuppressWarnings("unused")
 public class DiskSpaceLimitIntegrationTest {
 
+  private static final int DIR_OF_DELETED_FILES_IS_ONE_FILE = 1;
   private static final long FILE_SIZE_LIMIT = 256;
   private static final long DISK_SPACE_LIMIT = FILE_SIZE_LIMIT * 2;
 
@@ -65,7 +66,6 @@ public class DiskSpaceLimitIntegrationTest {
   private Statistics statistics;
 
   private RollingFileHandler testRollingFileHandler;
-  private MainWithChildrenRollingFileHandler mainWithChildrenRollingFileHandler;
 
   private SampleCollector sampleCollector;
   private StatArchiveHandlerConfig config;
@@ -83,6 +83,7 @@ public class DiskSpaceLimitIntegrationTest {
   @Before
   public void setUp() throws Exception {
     this.dir = this.temporaryFolder.getRoot();
+    this.dirOfDeletedFiles = this.temporaryFolder.newFolder("deleted");
 
     this.name = this.testName.getMethodName();
 
@@ -108,13 +109,18 @@ public class DiskSpaceLimitIntegrationTest {
     when(this.config.getProductDescription()).thenReturn(this.testName.getMethodName());
 
     this.testRollingFileHandler = new TestableRollingFileHandler();
-    this.mainWithChildrenRollingFileHandler = new MainWithChildrenRollingFileHandler();
 
     this.sampleCollector = new SampleCollector(sampler);
 
     this.initTimeStamp = NanoTimer.getTime();
     this.timer.reset();
     this.nanosTimeStamp = this.timer.getLastResetTime() - getNanoRate();
+
+    preConditions();
+  }
+
+  public void preConditions() throws Exception {
+    validateNumberFiles(0);
   }
 
   @After
@@ -124,7 +130,6 @@ public class DiskSpaceLimitIntegrationTest {
 
   @Test
   public void zeroKeepsAllFiles() throws Exception {
-    this.dirOfDeletedFiles = this.temporaryFolder.newFolder("deleted");
     this.sampleCollector.initialize(this.config, this.initTimeStamp, this.testRollingFileHandler);
 
     when(this.config.getArchiveDiskSpaceLimit()).thenReturn(0L);
@@ -136,7 +141,6 @@ public class DiskSpaceLimitIntegrationTest {
 
   @Test
   public void aboveZeroDeletesOldestFile() throws Exception {
-    this.dirOfDeletedFiles = this.temporaryFolder.newFolder("deleted");
     this.sampleCollector.initialize(this.config, this.initTimeStamp, this.testRollingFileHandler);
 
     when(this.config.getArchiveDiskSpaceLimit()).thenReturn(DISK_SPACE_LIMIT);
@@ -161,16 +165,14 @@ public class DiskSpaceLimitIntegrationTest {
 
   @Test
   public void aboveZeroDeletesPreviousFiles() throws Exception {
-    assertThat(numberOfFiles(this.dir)).as("Unexpected files: " + listFiles(this.dir)).isEqualTo(0);
-
     int oldMainId = 1;
     int newMainId = 2;
 
     int numberOfPreviousFiles = 100;
     int numberOfLines = 100;
     createPreviousFiles(oldMainId, numberOfPreviousFiles, numberOfLines);
-    assertThat(numberOfFiles(this.dir)).as("Missing files: " + listFiles(this.dir))
-        .isEqualTo(numberOfPreviousFiles);
+
+    validateNumberFiles(numberOfPreviousFiles);
 
     for (int childId = 1; childId <= numberOfPreviousFiles; childId++) {
       assertThat(archiveFile(oldMainId, childId)).exists();
@@ -186,8 +188,7 @@ public class DiskSpaceLimitIntegrationTest {
     when(this.config.getArchiveDiskSpaceLimit())
         .thenReturn(sizeOfDirectory(this.dir) / numberOfPreviousFiles);
 
-    this.sampleCollector.initialize(this.config, this.initTimeStamp,
-        this.mainWithChildrenRollingFileHandler);
+    this.sampleCollector.initialize(this.config, this.initTimeStamp, this.testRollingFileHandler);
 
     assertThat(archiveFile()).exists().hasParent(this.dir);
     assertThat(markerFile(newMainId)).exists().hasParent(this.dir).hasBinaryContent(new byte[0]);
@@ -199,8 +200,7 @@ public class DiskSpaceLimitIntegrationTest {
     sampleUntilFileExists(archiveFile(newMainId, 1));
     assertThat(archiveFile(newMainId, 1)).exists();
 
-    // this might be a brittle assertion... ok to delete if following for-block-assertion passes
-    assertThat(numberOfFiles(this.dir)).as("Unexpected files: " + listFiles(this.dir)).isEqualTo(2);
+    validateNumberFiles(2);
 
     for (int childId = 1; childId <= numberOfPreviousFiles; childId++) {
       assertThat(archiveFile(oldMainId, childId)).doesNotExist();
@@ -213,16 +213,14 @@ public class DiskSpaceLimitIntegrationTest {
     this.archiveFileName = new File(this.dir, this.name + ".gfs").getAbsolutePath();
     when(this.config.getArchiveFileName()).thenReturn(new File(this.archiveFileName));
 
-    assertThat(numberOfFiles(this.dir)).as("Unexpected files: " + listFiles(this.dir)).isEqualTo(0);
-
     int oldMainId = 1;
     int newMainId = 2;
 
     int numberOfPreviousFiles = 100;
     int numberOfLines = 100;
     createPreviousFiles(oldMainId, numberOfPreviousFiles, numberOfLines);
-    assertThat(numberOfFiles(this.dir)).as("Missing files: " + listFiles(this.dir))
-        .isEqualTo(numberOfPreviousFiles);
+
+    validateNumberFiles(numberOfPreviousFiles);
 
     for (int childId = 1; childId <= numberOfPreviousFiles; childId++) {
       assertThat(archiveFile(oldMainId, childId)).exists();
@@ -238,8 +236,7 @@ public class DiskSpaceLimitIntegrationTest {
     when(this.config.getArchiveDiskSpaceLimit())
         .thenReturn(sizeOfDirectory(this.dir) / numberOfPreviousFiles);
 
-    this.sampleCollector.initialize(this.config, this.initTimeStamp,
-        this.mainWithChildrenRollingFileHandler);
+    this.sampleCollector.initialize(this.config, this.initTimeStamp, this.testRollingFileHandler);
 
     assertThat(archiveFile()).exists().hasParent(this.dir);
     assertThat(markerFile(newMainId)).exists().hasParent(this.dir).hasBinaryContent(new byte[0]);
@@ -252,11 +249,18 @@ public class DiskSpaceLimitIntegrationTest {
     assertThat(archiveFile(newMainId, 1)).exists();
 
     // this might be a brittle assertion... ok to delete if following for-block-assertion passes
-    assertThat(numberOfFiles(this.dir)).as("Unexpected files: " + listFiles(this.dir)).isEqualTo(2);
+    validateNumberFiles(2);
 
     for (int childId = 1; childId <= numberOfPreviousFiles; childId++) {
       assertThat(archiveFile(oldMainId, childId)).doesNotExist();
     }
+  }
+
+  /**
+   * Validates number of files under this.dir while ignoring this.dirOfDeletedFiles.
+   */
+  private void validateNumberFiles(final int expected) {
+    assertThat(numberOfFiles(this.dir)).as("Unexpected files: " + listFiles(this.dir)).isEqualTo(expected);
   }
 
   private void sampleNumberOfTimes(final int value) throws InterruptedException {
@@ -393,7 +397,8 @@ public class DiskSpaceLimitIntegrationTest {
   }
 
   private int numberOfFiles(final File dir) {
-    return dir.listFiles().length;
+    int ignoreDirOfDeletedFiles = 1;
+    return dir.listFiles().length - ignoreDirOfDeletedFiles;
   }
 
   private void createPreviousFiles(final int mainId, final int fileCount, final int lineCount)
